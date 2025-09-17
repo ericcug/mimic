@@ -1,0 +1,44 @@
+name: Build BPF and Upload to Release
+
+on:
+  push:
+    tags:
+      - 'v*.*.*'
+
+jobs:
+  build-and-upload:
+    name: Build BPF and upload to release
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write # Required to upload release assets
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt install python3 clang-15 llvm pahole \
+            bats bc conntrack ethtool iperf3 jq socat tshark wireguard-tools \
+            libbpf-dev libffi-dev libelf-dev libxdp-dev
+
+      - name: Build BPF object
+        run: |
+          # The GitHub runner needs vmlinux in a place where the Makefile can find it.
+          # This mimics the setup in the existing push.yml workflow.
+          sudo mkdir -p /lib/modules/`uname -r`/build
+          sudo cp /sys/kernel/btf/vmlinux /lib/modules/`uname -r`/build/vmlinux
+          make out/mimic.bpf.o BPF_CC=clang-15
+
+      - name: Upload or Create Release with BPF object
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          TAG_NAME=${{ github.event.release.tag_name || github.ref_name }}
+          if [ "${{ github.event_name }}" = "release" ]; then
+            # Release was created manually, just upload the asset.
+            gh release upload "$TAG_NAME" out/mimic.bpf.o
+          elif [ "${{ github.event_name }}" = "push" ]; then
+            # A tag was pushed, create a new release and attach the asset.
+            gh release create "$TAG_NAME" out/mimic.bpf.o --generate-notes
+          fi
